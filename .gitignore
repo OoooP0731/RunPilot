@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.DS_Store
+.venv/
+# Execution state belongs outside the research project and skill source.
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+# Local evaluation transcripts, logs, and snapshots may contain machine paths.
+run-pilot-workspace/
+# Historical trial notes reference a private local attachment.
+RunPilot-trial-review-2026-10-16.md
+# Keep local credentials out of future commits.
+.env
+.env.*
+*.pem
+*.key
