@@ -65,6 +65,11 @@ def validate():
     compatibility = info.get("compatibility", "")
     if not isinstance(compatibility, str) or len(compatibility) > 500:
         raise ValueError("Invalid compatibility metadata")
+    license_name = info.get("license")
+    if license_name != "MIT":
+        raise ValueError("The distributable skill must declare its MIT license")
+    if (SKILL / "LICENSE").read_bytes() != (ROOT / "LICENSE").read_bytes():
+        raise ValueError("The packaged skill license must match the repository license")
     if len(text.splitlines()) > 500:
         raise ValueError("Disclose references instead of a >500 line main skill")
     links = []

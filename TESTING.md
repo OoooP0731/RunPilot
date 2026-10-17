@@ -1,5 +1,13 @@
 # RunPilot 测试与验证
 
+## v0.1.2 — 2026-10-17
+
+本轮在 macOS / Python 3.9.6 运行 129 项 unittest，全部通过；无 mock 的本地 CPU CLI 闭环通过，普通 Python 导出任务得到真实退出 0 与完成事件。`example.py` 静态识别不执行项目代码；该脚本的真实受管启动、单次巡检、退出码 0、`completed` 状态及完成事件文件投递均通过。
+
+`npx --yes skills add . --list` 识别到 `run-pilot`；对 GitHub 仓库运行 `--list` 也识别同名技能，但远端仍是 v0.1.1，不能把它当作 v0.1.2 已发布的验证。构建归档包含 13 个文件及 MIT 许可，ZIP CRC、许可文本一致性和 `dist/run-pilot.skill.sha256` 校验通过。
+
+本轮未在 Python 3.12、真实 GPU 或 SSH 远程执行环境复测；已登录目标机上按本地方式运行与从本机发起 SSH 远程启动是两回事。周期服务安装和自动重试仍未实现。
+
 ## v0.1.1 — 2026-10-17
 
 在本机 macOS 复测；以下均为合成/CPU 任务，不是生产环境或 GPU 兼容性认证。原始本地日志位于被 `.gitignore` 排除的 `run-pilot-workspace/validation/`，公开仓库提供可复跑源码与摘要。
@@ -10,9 +18,9 @@
 | Python 3.12.14 | 同 129 项通过 |
 | 无 mock 的本地 CLI 闭环（两版本） | 现有 JSON 报告任务与普通 Python CSV 导出脚本均完成；真实退出 0、完成事件文件已投递，直接模型提交为 0 |
 | 通用任务回归 | 普通入口静态识别、通用进度解析、受约束环境变量覆盖、长运行进程只读观察、`exit_code` 成功/失败/缺回执/只读接管边界 |
-| 安装体 | YAML、内部引用、Python 语法检查通过；12 文件 ZIP CRC、逐文件源码一致性与解包后独立 CLI 检查通过；SHA-256 见 `dist/run-pilot.skill.sha256` |
+| 安装体 | YAML、内部引用、Python 语法检查通过；12 文件 ZIP CRC、逐文件源码一致性与解包后独立 CLI 检查通过；SHA-256 见 `v0.1.1` 标签的 `dist/run-pilot.skill.sha256` |
 
-可复跑 v0.1.1：
+检出 `v0.1.1` 后可复跑该版本：
 
 ```sh
 make test
@@ -42,7 +50,7 @@ python3 tools/verify_local_runtime.py
 | 归档构建 | 12 个文件，排除评测和缓存，ZIP 校验与 SHA-256 | `dist/run-pilot.skill` 及 `.sha256` |
 | 离线决策输出格式 | 6 份 JSON/Markdown 全部通过 | 各 run 的 `format_grading.json` |
 
-复现以下历史数字请先检出 `v0.1.0`；在当前 `main` 上执行这些命令得到的是 v0.1.1 的结果：
+复现以下历史数字请先检出 `v0.1.0`；在当前源码上执行这些命令不会得到 v0.1.0 的结果：
 
 ```sh
 python3 -m unittest discover -s tests -v
