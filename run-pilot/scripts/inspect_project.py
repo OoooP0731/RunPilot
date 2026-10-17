@@ -31,6 +31,10 @@ PROTECTED = re.compile(
     r"(?:batch(?:_size)?|learning_rate|lr|epochs?|max_steps|seed|precision|"
     r"gradient_accumulation_steps|num_workers|world_size)", re.I,
 )
+ENTRY_NAMES = {
+    "__main__", "main", "run", "launch", "train", "fit", "job", "task", "worker",
+    "process", "pipeline", "batch", "export", "etl", "serve", "server",
+}
 
 
 def _command(value):
@@ -125,6 +129,10 @@ def inspect_project(project, command=None):
     if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
         raise PilotError("project must be an existing nonsymlink directory")
     provided = _command(command)
+    named_scripts = {
+        Path(value).name for value in (command or [])
+        if isinstance(value, str) and value.endswith(".py")
+    }
     start = time.monotonic()
     files, candidates, hints, notes = [], [], [], []
     counts = {"entries": 0, "files_read": 0, "bytes_read": 0, "excluded_directories": 0,
@@ -181,7 +189,7 @@ def inspect_project(project, command=None):
                     if path.suffix.lower() == ".py":
                         evidence, file_hints, flags, problem = _python_evidence(text, relative)
                         hints.extend(file_hints[:max(0, 128 - len(hints))])
-                        if evidence or path.stem.lower() in {"train", "main", "run", "fit", "launch"}:
+                        if evidence or path.stem.lower() in ENTRY_NAMES or path.name in named_scripts:
                             candidates.append({
                                 "path": relative, "kind": "python", "evidence": evidence,
                                 "arguments": flags, "executable_verified": False,
@@ -206,7 +214,7 @@ def inspect_project(project, command=None):
         "unknowns": [
             "Actual effective configuration and project environment were not executed or imported.",
             "Candidate names/main guards do not prove launch safety, unit independence or resume support.",
-            "No train --help, dependency installation, GPU probe, network access or project write occurred.",
+            "No project --help, dependency installation, GPU probe, network access or project write occurred.",
         ],
     }
 

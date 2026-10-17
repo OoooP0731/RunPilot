@@ -1,143 +1,118 @@
 # RunPilot
 
-接管已有 PyTorch 任务，在保留项目配置的基础上安排运行、观察状态，并只在有意义的事件发生时通知或请求 Agent 分析。
+**接管已有 Python 任务，清楚地知道它在运行、结束、失败，还是暂时无法确认。**
 
-## 当前交付：v0.1.0
+RunPilot 适用于数据导出、ETL、批处理、长运行 worker、服务脚本及机器学习训练等 Python 工作负载。它保留项目原有命令和配置：先只读识别，再按授权启动新任务或接管本地现有进程；固定程序按次巡检进程、日志与资源，记录事件并投递通知。多个原本独立的任务可以在写入隔离、资源和授权证据充分时逐个准入，而不是盲目开满并发。
 
-仓库现提供独立的 [run-pilot/SKILL.md](run-pilot/SKILL.md)、按需参考文档、
-Python 标准库运行时和合成/CPU 回归测试。固定程序不是每轮读取提示词的 Agent。
-**复制技能或保存契约都不会自动安装服务、连接训练机或启动训练。**
+RunPilot **不要求 PyTorch，也不要求 GPU**。它不替项目发明启动参数、成功标准或恢复策略；没有可靠证据时，结果会保持未验证。
 
-这是保守的首版运行闭环，不是“任意项目全自动接管”：
+## 能做什么
 
-| 能力 | 本版边界 |
-| --- | --- |
-| 项目识别 | 有界静态检查，不 import 项目、不执行训练入口/`--help` |
-| 本地启动与接管 | 结构化 argv；本地 supervisor 保存真实退出结果；已有进程只读接管、不迁移启动器 |
-| 固定程序巡检 | SQLite 状态/事件/outbox 事务；执行、可达性、监控开关分开；没有内置模型调用 |
-| 独立单元准入 | 在原有入口、批准范围、写入隔离及资源证据充分时逐个增加；风险下 drain，不杀在跑任务 |
-| 完成判定 | 消费映射好的项目已有 JSON 报告；归属、必需字段、非空分组和新旧产物检查；证据不足不报成功 |
-| 通知 | 本地幂等事件文件；macOS 桌面适配器。不宣称文件通知等于手机推送，桌面接收不等于用户已读 |
-| 可选分析 | 仅写本地脱敏请求 spool；不执行任意命令、不自动唤醒模型或聊天窗口 |
-| 自动恢复 | 本版关闭；不因 OOM、best weights 或退出文件缺失自动重跑 |
-| SSH / 调度器 | SSH 采集接口当前明确返回 unsupported，不发起连接；不提供远程启动、后台服务自动安装或集群资源后端 |
+- **识别与接管**：有界静态检查 Python 项目，不导入或执行项目代码；已有本地进程按 PID、启动时间与系统标识只读接管，不停止或重启它。
+- **安全启动**：获准后以原始 argv 和工作目录启动本地 Python 任务；启动前检查资源余量、重复提交、依赖和输出路径。受管任务通过 supervisor 记录真实退出码。
+- **按次巡检**：检查进程、CPU/内存/磁盘（有设备时也检查 GPU）、增量日志、退出和完成证据；将状态、事件与通知待办保存在 SQLite。识别 `step/epoch` 及 `current/processed/progress` 等有限格式，未解析的日志不被误判为停滞。
+- **自选完成条件**：普通受管脚本可明确采用退出码 0；已有 JSON 报告的任务可映射必需字段、成功值和分组。两者不能混用来绕过项目的真实验收标准。
+- **独立单元调度与通知**：在证据充分时逐个准入；资源或吞吐风险下停止增加新任务、让已运行任务自然结束。事件可写本地文件或发送 macOS 桌面通知；可选分析只写脱敏的本地请求文件，不自行调用模型。
 
-**程序本身不调用模型，不等于已经部署了持续监控。** 默认建议间隔为 20 分钟；
-本轮没有安装任何周期任务。没有独立调度入口时只能手动执行或如实声明 Agent 模式，
-不能把 Agent 的静默回复当成零模型巡检。
+## 安装
 
-## 安装体与依赖
+要求 Python **3.9+**、Linux/macOS、本机 POSIX 文件锁和 SQLite；运行时只使用 Python 标准库。下载 [v0.1.1 安装包](https://github.com/OoooP0731/RunPilot/releases/tag/v0.1.1) 的 `run-pilot.skill` 及同名 `.sha256`，校验后将 ZIP 解压至技能宿主的目录；也可直接使用仓库中的 [`run-pilot/`](run-pilot/)。归档自带 `SKILL.md`、`references/` 与 `scripts/`，请完整保留。安装前检查目标位置是否已有同名技能，避免覆盖。
 
-```text
-run-pilot/
-├── SKILL.md
-├── references/       # 接管、契约、运行与恢复边界
-├── scripts/          # inspect_project.py / run.py / monitor.py 与共享模块
-└── evals/            # 开发用行为评测，不打入安装归档
-tests/                # 标准库回归测试；不含科研数据或权重
-tools/build_skill.py  # 元数据/引用/语法检查与可复现打包
+```sh
+shasum -a 256 -c run-pilot.skill.sha256
+unzip run-pilot.skill -d /path/to/your/skills
 ```
 
-运行时要求 Python 3.9+、POSIX 文件锁及 SQLite；不会安装/升级 PyTorch 或 CUDA。
-打包校验使用环境已有的 PyYAML，或已有 Ruby/Psych 的安全 YAML 解析器，均不自动安装。
-`dist/run-pilot.skill` 为 ZIP 格式安装归档，另附 SHA-256 文件；也可直接使用源码目录。
+安装技能不等于配置常驻巡检、授权启动、连接远程主机或运行项目。下述命令可直接使用源码/解包后的脚本；`SKILL_DIR` 指向包含 `SKILL.md` 的**绝对路径**。
 
-将整个 `run-pilot/` 目录放入宿主支持的技能目录，保留 scripts 与 references。
-先确认目标没有同名技能，避免覆盖本地修改。本次交付不擅自写入全局技能目录。
+## 快速开始：管理一个普通 Python 脚本
 
-## 快速开始（仅监控）
-
-以下路径为示例，先换成真实的技能目录、项目路径、私有句柄及 PID。
-只读监控不需要 `scope_approved=true`，更不包含停止/重启训练的权限。
+先确认项目原命令、工作目录、输出位置、资源需求，以及“退出码 0 是否真的意味着任务完成”。示例中的授权字段仅用于演示；真实使用须由任务所有者明确批准，不能照抄示例授予权限。
 
 ```sh
 SKILL_DIR="/absolute/path/to/run-pilot"
 STATE_DIR="$HOME/.local/state/run-pilot"
-
-python3 "$SKILL_DIR/scripts/inspect_project.py" --project "/absolute/existing/project"
-
-# 根据已查证信息准备私有契约；格式见 references/contract.md。
-python3 "$SKILL_DIR/scripts/run.py" init \
-  --contract "/absolute/private/observe-contract.json" --state-dir "$STATE_DIR"
-python3 "$SKILL_DIR/scripts/run.py" attach \
-  --execution "observe-existing" --unit "existing" --pid 12345 --state-dir "$STATE_DIR"
-python3 "$SKILL_DIR/scripts/monitor.py" check-once \
-  --execution "observe-existing" --state-dir "$STATE_DIR"
-python3 "$SKILL_DIR/scripts/monitor.py" status \
-  --execution "observe-existing" --state-dir "$STATE_DIR"
-python3 "$SKILL_DIR/scripts/monitor.py" events \
-  --execution "observe-existing" --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/inspect_project.py" --project "/absolute/my-project"
+# 已知原命令时还可传入 --command-json '["/absolute/path/to/python3","/absolute/my-project/custom.py"]'
 ```
 
-契约模板和字段含义见 [references/contract.md](run-pilot/references/contract.md)。
-契约保存在 RunPilot 私有状态，不要求训练项目新增交接文件。
-启动命令与资源上限必须来自用户授权，不能把示例中的批准值照抄为真实授权。
-`launch --dry-run` 只做准入检查；不改变单任务配置。
+把下面的 JSON 存为**项目目录之外的私有文件** `/absolute/private/export-contract.json`，将路径、解释器、资源估算和授权替换成实际值：
 
-`check-once` 输出的是检查记录，退出 0 不表示训练成功。主要输出字段：
+```json
+{
+  "schema_version": 1,
+  "execution_id": "daily-export",
+  "project": "/absolute/my-project",
+  "target": {"kind": "local"},
+  "scope_approved": true,
+  "allowed_actions": ["observe", "launch"],
+  "max_concurrency": 1,
+  "devices": [],
+  "reserves": {"ram_mb": 512, "disk_mb": 1024, "cpu_threads": 1},
+  "units": [{
+    "id": "export",
+    "argv": ["/absolute/path/to/python3", "/absolute/my-project/export.py"],
+    "cwd": "/absolute/my-project",
+    "write_paths": ["/absolute/my-project/output.csv"],
+    "resources": {"ram_mb": 512, "disk_mb": 512, "cpu_threads": 1},
+    "completion": {"kind": "exit_code"}
+  }],
+  "notification": {"kind": "none"}
+}
+```
 
-- `model_submissions`：本程序直接提交模型的次数，固定为 0；spool 请求另行计数。
-- `program_errors`：监控器自身错误，不伪造训练失败。
-- `needs_scheduler`：还有活动监控或投递待办时为 true；false 才表示可撤掉对应调用入口。
-- `pending_delivery`：终态后通知失败仍保留待办，不因停止训练采集而丢掉最后一次投递。
-
-JSON API、日志/完成报告解析都有范围限制；无法解析时保留未知，不保证从任意自由文本推导科研完成。
-
-## 停止、升级与卸载
+`completion: {"kind":"exit_code"}` **只适用于 RunPilot 受管启动，且仅在项目约定成功退出即完成时使用**。如果脚本可能在输出不完整时仍返回 0，应改用项目已有的 JSON 完成报告，或不指定完成条件；不要把“进程退出”误报为业务成功。`write_paths` 声明原任务会写的路径，RunPilot 不会替项目创建输出目录。现有非空输出默认阻断新启动。
+如需原任务的非凭据环境覆盖，可在单元内指定 `env`（例如 `{"JOB_MODE":"export"}`）；默认继承已准备的运行环境，切勿在契约或命令参数中保存密码、令牌和带口令的 URL。
 
 ```sh
-python3 "$SKILL_DIR/scripts/run.py" stop-monitor \
-  --execution "observe-existing" --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/run.py" init --contract /absolute/private/export-contract.json --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/run.py" launch --execution daily-export --unit export --dry-run --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/run.py" launch --execution daily-export --unit export --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/monitor.py" check-once --execution daily-export --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/monitor.py" status --execution daily-export --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/monitor.py" events --execution daily-export --state-dir "$STATE_DIR"
 ```
 
-**停止监控不停止训练。** 需要继续投递的 outbox 仍应保留固定程序调用入口。
-暂停/恢复仅切换监控开关；已有终态不会被自动复活。
+`init` 保存不可变的执行契约但**不会启动**；`--dry-run` 只检查准入。请在提交前审查原脚本的副作用和真实资源需求。`check-once` 只巡检一次，退出状态 0 表示检查程序成功，不代表任务完成；查看 `status.units.<id>.execution_state` 和退出/完成证据。
 
-- 更新或移走技能目录时保留私有状态与资源域登记；不要为升级清空活动运行状态。
-- SQLite 状态 schema 为 1；未知 schema 拒绝打开，不悄悄重建。
-- 本版不自动安装调度器，所以没有隐藏服务需要卸载。若用户自行配置了调用入口，
-  先核实所有对应单元与通知待办，再单独停止该入口，不影响其他任务。
-- 卸载只移除安装的技能目录；运行记录、通知和训练产物由用户决定是否保留。
-- 不删除仍被 supervisor 使用的脚本、私有 attempt 目录或资源登记。
+### 已经在运行的 Python 进程
+
+仅观察时，把契约改为 `"scope_approved": false`、`"allowed_actions": ["observe"]`，为单元提供 `"argv": []`，保存后执行：
+
+```sh
+python3 "$SKILL_DIR/scripts/run.py" init --contract /absolute/private/observe-contract.json --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/run.py" attach --execution existing-job --unit worker --pid 12345 --state-dir "$STATE_DIR"
+python3 "$SKILL_DIR/scripts/monitor.py" check-once --execution existing-job --state-dir "$STATE_DIR"
+```
+
+示例中的 execution/unit 必须与观察契约一致。接管不会变成父进程，也不能凭 PID 消失获取可信退出码；即便写了 `exit_code` 完成策略，只读接管仍不会据此判成功。需要业务完成证据时，映射项目**已经存在**的 JSON 报告；格式和归属限制见 [运行契约](run-pilot/references/contract.md)。
+
+## 持续监控、状态和通知
+
+要持续观察，可在**自行批准并配置的**系统定时器/已有调度入口中定期调用同一个 `check-once`（例如 20 分钟一次）。RunPilot 不会自动安装后台服务；没有外部调用时只是手动巡检。正常巡检由固定程序执行，不需要每次唤醒 Agent。`needs_scheduler` 表示仍有活动单元或待投递事项；终态后也不要在通知待办处理前撤掉唯一调用入口。
+
+- `running`：当前进程身份匹配，正在运行；长运行服务可以一直保持此状态。
+- `completed`：按**所选策略**验证完成：受管进程真实退出 0，或当前执行的 JSON 报告符合约定且任务已结束。
+- `failed`：已收到当前任务的真实非零退出；`incomplete`：已知报告验收不通过；`finished_unverified`：进程已结束，但缺少可信退出/完成定义。
+- `access`、`monitoring` 与 `execution_state` 分开记录。失联、无日志或检查器报错不自动等同于任务失败。
+
+`pause-monitor` / `resume-monitor` / `stop-monitor` 控制采集开关，**不会停止或重启 Python 进程**。文件通知留在本机，桌面通知仅适用于 macOS；均不等于手机推送。分析 spool 写入不代表已有模型完成分析。
+
+## 支持范围与约束
+
+当前可在本地启动/接管 Python 任务、按次巡检、按证据准入独立任务及投递本地事件；GPU 是可选资源，真实 NVIDIA GPU 与跨卡并发尚未实机验证。**SSH 采集/远程启动、集群调度器、自动 retry/resume、任意验证脚本和自动安装周期服务尚未实现**。不为了诊断任务而运行未经批准的项目代码，也不因 OOM 自动重跑或改配置。
+
+RunPilot 不保证所有 Python 项目都能无修改地取得业务级成功判定、可靠进度或自动并发：这些能力取决于项目原有入口、输出、日志与授权。完整字段和安全边界见 [接管](run-pilot/references/takeover.md)、[运行契约](run-pilot/references/contract.md)、[巡检](run-pilot/references/operations.md) 和 [异常交接](run-pilot/references/recovery.md)。
+
+本仓库未选定开源许可证；公开可读**不等于**获得复用授权。
 
 ## 开发与验证
 
 ```sh
-make test       # stdlib unittest；仅合成 fixture 与短时 CPU 子进程
-make validate   # YAML、内部引用与 Python 语法检查
-make build      # 先测试/校验，再创建 dist/run-pilot.skill
+make test
+make validate
+make build
+python3 tools/verify_local_runtime.py
 ```
 
-真实 NVIDIA GPU、跨 GPU 并发与桌面通知权限需在目标环境单独验证；
-SSH、集群调度器及自动恢复则尚未实现，不能将它们仅描述为“未实测”。
-不能用本机 CPU 测试冒充 GPU 支持认证。121 项双 Python 版本回归、本地 CPU 闭环和
-离线对照结果见 [TESTING.md](TESTING.md)；全部结果与局限均有记录。
-公开发布许可证尚待维护者选择；公开可读不等于授予复用许可。本次未复制参考仓库的脚本或许可文本，也不暗示上游背书。
-
-## 运行边界
-
-- 科研配置由项目和用户提供；优先通过已批准独立任务的并行执行提高整体效率，不为占满显存调参。
-- 原任务没有 smoke 时不自行创建；正式任务的自然运行可以提供资源观测。
-- 允许跨 GPU 运行；报告本次实际使用的 GPU。
-- 正常巡检的目标路径是“定时器 → 固定程序 → 状态比较 → 无事件退出”，只有必要事件进入 Agent。独立程序部署前不宣称已经零模型运行。
-- 监控不等于取得停止/重启权限，设计文档不等于批准部署。
-
-## SSH 连接准备（发布说明）
-
-远程使用时，由用户预先准备可用的 SSH host 配置和认证。无人值守检查需要能够在不等待交互输入的情况下连接；复用已有连接方式，不由 RunPilot 每轮讨论密码或创建专用监控密钥。
-
-账户权限、密钥保管和访问限制由用户管理；本 Skill 不负责建立“只读监控密钥”体系。保留主机身份校验、连接/命令超时；认证失败时说明连接尚未就绪，不自行变更服务器认证设置。
-
-不要将密码、私钥或令牌粘贴进公开问题、示例、训练日志或版本库。发布用 fixture 应使用虚构连接信息。
-
-## 设计依据与后续范围
-
-- [RunPilot-plan-v0.4.md](RunPilot-plan-v0.4.md)：产品范围与用户决策；保留原始设计状态。
-- [RunPilot-runtime-design.md](RunPilot-runtime-design.md)：并行、事件/动作契约与完整目标验收。
-- [RunPilot-skill-prompt.md](RunPilot-skill-prompt.md)：原始提示词；当前安装入口为技能目录中的 SKILL.md。
-- 历史试用复盘及原始评测工作区保留在本地，不随公开仓库发布；其中含本机路径和执行记录。
-- [reference-skill-review.md](reference-skill-review.md)：此前对参考 Skill 固定版本的核查。
-- [CHANGELOG.md](CHANGELOG.md)：实现版本与已明确收敛的范围。
-
-后续再按授权接入常在线训练端调度、经实机验证的 GPU/远程适配和项目特定恢复。
-原始设计文档中的未来能力不自动成为本版已实现或已部署的承诺。
+版本变化见 [CHANGELOG.md](CHANGELOG.md)，实测环境与未覆盖范围见 [TESTING.md](TESTING.md)。仓库内早期的 `RunPilot-plan-v0.4.md` 等是历史设计稿，并非当前发行能力承诺。

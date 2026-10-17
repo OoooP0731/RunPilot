@@ -306,6 +306,17 @@ class CollectorTests(unittest.TestCase):
             stream.write(b"/10 phase=train\n")
         self.assertEqual(self.collect()["progress"]["value"]["step"], 6)
 
+    def test_generic_progress_json_and_plain_text_are_incremental(self):
+        self.log.write_text('{"phase":"export","current":2,"total":5}\n', encoding="utf-8")
+        progress = self.collect()["progress"]["value"]
+        self.assertEqual(progress["step"], 2)
+        self.assertEqual(progress["work_kind"], "current")
+        with self.log.open("a", encoding="utf-8") as stream:
+            stream.write("processed 3/5 phase=export\n")
+        progress = self.collect()["progress"]["value"]
+        self.assertEqual(progress["step"], 3)
+        self.assertEqual(progress["work_kind"], "processed")
+
     def test_rotation_does_not_join_old_partial_with_new_file(self):
         self.log.write_text("CUDA out of")
         self.collect()
@@ -689,6 +700,27 @@ class StaticInspectionTests(unittest.TestCase):
         self.assertEqual(report["candidates"][0]["arguments"][0]["static_default"], "16")
         self.assertEqual(report["configuration_hints"][0]["effective"], "unknown")
         self.assertLessEqual(report["counts"]["bytes_read"], inspect_project.MAX_TOTAL_BYTES)
+
+    def test_generic_python_entry_name_is_a_candidate_without_executing_it(self):
+        marker = self.root / "NOT-EXECUTED"
+        (self.root / "export.py").write_text(
+            "from pathlib import Path\nPath(%r).write_text('bad')\n" % str(marker),
+            encoding="utf-8",
+        )
+        with patch.object(subprocess, "Popen", side_effect=AssertionError("no project commands")):
+            report = inspect_project.inspect_project(self.root)
+        self.assertEqual(report["candidates"][0]["path"], "export.py")
+        self.assertFalse(marker.exists())
+        self.assertFalse(report["candidates"][0]["executable_verified"])
+
+    def test_arbitrarily_named_python_command_is_recognized_without_main_guard(self):
+        (self.root / "compute.py").write_text("print('not executed')\n", encoding="utf-8")
+        report = inspect_project.inspect_project(
+            self.root, [sys.executable, str(self.root / "compute.py")],
+        )
+        self.assertEqual(report["candidates"][0]["path"], "compute.py")
+        self.assertFalse(report["command_executed"])
+        self.assertFalse(report["candidates"][0]["executable_verified"])
 
     def test_excludes_data_weights_venvs_and_all_symlinks(self):
         self.project()

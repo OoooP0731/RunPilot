@@ -108,6 +108,31 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result["model_submissions"], 0)
         self.assertEqual(len(list((self.state_dir / "attempts/cpu-run/dummy").glob("attempt-*"))), 1)
 
+    def test_generic_python_export_is_completed_by_supervised_zero_exit(self):
+        from run import launch_unit, reconcile
+        worker = self.root / "export.py"
+        output = self.root / "export.csv"
+        worker.write_text(
+            "import sys,time\n"
+            "time.sleep(0.2)\n"
+            "open(sys.argv[1], 'w').write('name,value\\nexample,1\\n')\n",
+            encoding="utf-8",
+        )
+        self.doc["units"][0].update(
+            argv=[sys.executable, str(worker), str(output)],
+            write_paths=[str(output)], completion={"kind": "exit_code"},
+        )
+        store = self.store()
+        with patch("run.collect", side_effect=self.resources):
+            launched = launch_unit(store, self.doc, "dummy")
+        self.assertIn(launched["status"], {"submitted", "confirmed"})
+        runtime = store.unit("cpu-run", "dummy")
+        self.assertIsNone(runtime["completion_baseline"])
+        self.assertEqual(self.wait_exit(runtime)["exit_code"], 0)
+        reconcile(store, "cpu-run")
+        self.assertEqual(store.unit("cpu-run", "dummy")["execution_state"], "completed")
+        self.assertEqual(output.read_text(encoding="utf-8"), "name,value\nexample,1\n")
+
     def test_missing_primary_without_exit_holds_authoritative_reservation(self):
         import run
         from core import write_json
@@ -280,11 +305,12 @@ class RunTests(unittest.TestCase):
         source = (
             "import json,os,sys; "
             "print(json.dumps({'argv':sys.argv[1:],'cwd':os.getcwd(),"
-            "'omp':os.environ.get('OMP_NUM_THREADS')},ensure_ascii=False))"
+            "'omp':os.environ.get('OMP_NUM_THREADS'),"
+            "'mode':os.environ.get('JOB_MODE')},ensure_ascii=False))"
         )
         self.doc["project"] = str(project)
         self.doc["units"][0].update(argv=[sys.executable, "-c", source] + args,
-                                    env={"OMP_NUM_THREADS": "2"})
+                                    env={"OMP_NUM_THREADS": "2", "JOB_MODE": "export"})
         store = self.store()
         with patch("run.collect", side_effect=self.resources):
             launch_unit(store, self.doc, "dummy")
@@ -294,6 +320,7 @@ class RunTests(unittest.TestCase):
         self.assertEqual(log["argv"], args)
         self.assertEqual(Path(log["cwd"]).resolve(), project.resolve())
         self.assertEqual(log["omp"], "2")
+        self.assertEqual(log["mode"], "export")
         self.assertFalse(marker.exists())
         request = json.loads(Path(runtime["request_path"]).read_text(encoding="utf-8"))
         manifest = json.loads(Path(runtime["manifest_path"]).read_text(encoding="utf-8"))
@@ -328,12 +355,13 @@ class RunTests(unittest.TestCase):
 
     def test_attach_and_monitor_controls_preserve_existing_process(self):
         from collectors import process_identity
+        from monitor import check_once
         from run import attach, set_monitoring
         self.doc.update(scope_approved=False, allowed_actions=["observe"])
         self.doc["units"][0]["argv"] = []
         store = self.store()
         child = subprocess.Popen(
-            [sys.executable, "-c", "import time; time.sleep(1.2)"],
+            [sys.executable, "-c", "import time; time.sleep(2)"],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         self.addCleanup(child.wait, timeout=10)
@@ -342,6 +370,9 @@ class RunTests(unittest.TestCase):
         self.assertEqual(result["identity"], before)
         self.assertFalse(result["managed"])
         self.assertTrue(attach(store, "cpu-run", "dummy", child.pid)["already_attached"])
+        checked = check_once(store, "cpu-run")
+        self.assertEqual(checked["model_submissions"], 0)
+        self.assertEqual(store.unit("cpu-run", "dummy")["execution_state"], "running")
         set_monitoring(store, "cpu-run", "paused", "dummy")
         self.assertIsNone(child.poll())
         self.cli("stop-monitor", "--execution", "cpu-run")

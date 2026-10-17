@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local RunPilot launch/observe controls. Never signal training or install a scheduler."""
+"""Local RunPilot launch/observe controls. Never signal tasks or install a scheduler."""
 
 import argparse
 import copy
@@ -78,7 +78,7 @@ def _confirmed_gone(identity):
 def completion_baseline(unit):
     """The same stat fingerprint consumed by the completion collector."""
     completion = unit.get("completion")
-    if not completion:
+    if not completion or completion.get("kind") != "json":
         return None
     try:
         from collectors import completion_fingerprint
@@ -432,12 +432,13 @@ def launch_unit(store, contract, unit_id, dry_run=False):
                     result["already_claimed"] = True
                     if claim["status"] == "released":
                         return _refused([
-                            "v0.1 refuses retry/resume/replay, including best-weights-only recovery"
+                            "RunPilot refuses retry/resume/replay, including partial-result-only "
+                            "recovery (e.g. best-weights)"
                         ], **{k: v for k, v in result.items() if k != "status"})
                     return result
                 runtime = store.unit(execution, unit_id)
                 if runtime["attempt"] or runtime["execution_state"] != "ready":
-                    return _refused(["v0.1 refuses retry/resume or replay of non-ready/previously attempted work"])
+                    return _refused(["RunPilot refuses retry/resume or replay of non-ready/previously attempted work"])
                 if not Path(unit.get("cwd", contract["project"])).is_dir():
                     return _refused(["Reviewed cwd must already exist; RunPilot does not create project directories"])
                 output_reasons = _output_refusals(unit)
@@ -457,7 +458,8 @@ def launch_unit(store, contract, unit_id, dry_run=False):
                 if dry_run:
                     return {"status": "dry-run", "allowed": True, "execution_id": execution,
                             "unit_id": unit_id, "argv": unit["argv"], "cwd": unit.get("cwd", contract["project"]),
-                            "assigned_devices": unit.get("devices", []), "training_started": False}
+                            "assigned_devices": unit.get("devices", []),
+                            "task_started": False, "training_started": False}
                 baseline = completion_baseline(unit)
                 attempt = runtime["attempt"] + 1
                 directory = store.root / "attempts"
@@ -537,7 +539,7 @@ def launch_unit(store, contract, unit_id, dry_run=False):
 
 
 def reconcile(store, execution, unit_id=None):
-    """Explicit, read-only-to-training reconciliation; does not schedule work."""
+    """Explicit reconciliation; does not signal or resubmit project work."""
     contract = store.contract(execution)
     selected = [unit_id] if unit_id is not None else [u["id"] for u in contract["units"]]
     for name in selected:
@@ -563,7 +565,8 @@ def reconcile(store, execution, unit_id=None):
                 registry.close()
     _reap_supervisors()
     return {"status": "reconciled", "execution_id": execution, "units": results,
-            "reservations": held, "training_started": False, "model_submissions": 0}
+            "reservations": held, "task_started": False, "training_started": False,
+            "model_submissions": 0}
 
 
 def attach(store, execution, unit_id, pid):
@@ -596,7 +599,7 @@ def attach(store, execution, unit_id, pid):
                         raise PilotError("Unit already has a different/managed claim; attach cannot replace it")
                     _synchronize(store, contract, unit, same[-1])
                     return {"status": "attached", "identity": identity, "already_attached": True,
-                            "training_started": False}
+                            "task_started": False, "training_started": False}
                 if runtime["attempt"] or runtime["execution_state"] != "ready":
                     raise PilotError("Attach cannot replace an existing attempt")
                 runtime.update(
@@ -619,7 +622,8 @@ def attach(store, execution, unit_id, pid):
                                 "%s:%s:1:attached" % (execution, unit_id), notify=False)
             finally:
                 registry.close()
-    return {"status": "attached", "identity": identity, "training_started": False, "managed": False}
+    return {"status": "attached", "identity": identity, "task_started": False,
+            "training_started": False, "managed": False}
 
 
 def set_monitoring(store, execution, monitoring, unit_id=None):
@@ -635,8 +639,9 @@ def set_monitoring(store, execution, monitoring, unit_id=None):
                 runtime["record_written_at"] = now()
                 store.save_unit(execution, unit["id"], runtime)
     return {"status": "monitoring_" + monitoring, "monitoring": monitoring,
-            "units": [unit["id"] for unit in units], "training_stopped": False,
-            "note": "Monitoring controls never stop/restart/resume training; v0.1 has no training retry/resume"}
+            "units": [unit["id"] for unit in units], "task_stopped": False,
+            "training_stopped": False,
+            "note": "Monitoring controls never stop/restart/resume a task; no automatic retry/resume"}
 
 
 def status(store, execution):
@@ -683,7 +688,8 @@ def main(argv=None):
             with store.lock(execution):
                 store.save_contract(doc)
             result = {"status": "initialized", "execution_id": execution,
-                      "training_started": False, "scheduler_installed": False}
+                      "task_started": False, "training_started": False,
+                      "scheduler_installed": False}
         elif args.command == "status":
             result = status(store, args.execution)
         elif args.command == "launch":
@@ -702,7 +708,7 @@ def main(argv=None):
         emit({"status": "busy", "detail": str(error), "model_submissions": 0})
         return 0
     except (PilotError, OSError, ValueError, sqlite3.Error) as error:
-        emit({"program_error": str(error), "training_failure": False})
+        emit({"program_error": str(error), "task_failure": False, "training_failure": False})
         return 2
     finally:
         if store is not None:

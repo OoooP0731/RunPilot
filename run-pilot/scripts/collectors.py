@@ -16,7 +16,7 @@ The worker's runtime log_path/exit_path override the unit's paths. Attached
 workers (managed != True) establish an EOF baseline on their first observation.
 
 No project code, validators, shell snippets, torch, remote installers, or
-training commands are executed. SSH/fixture targets are explicitly unsupported
+task commands are executed. SSH/fixture targets are explicitly unsupported
 here; fixture snapshots are supplied directly to monitor.check_once instead.
 """
 
@@ -57,7 +57,10 @@ GPU_APPS_QUERY = (
     "--format=csv,noheader,nounits",
 )
 ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]")
-TEXT_STEP = re.compile(r"\b(step|epoch)\s*[:=#]?\s*\[?\s*(\d{1,16})(?:\s*/\s*(\d{1,16}))?", re.I)
+TEXT_STEP = re.compile(
+    r"\b(step|epoch|progress|processed|items?)\s*[:=#]?\s*\[?\s*(\d{1,16})"
+    r"(?:\s*/\s*(\d{1,16}))?", re.I,
+)
 TEXT_PHASE = re.compile(r"\bphase\s*[:=]\s*([A-Za-z0-9_.-]{1,96})", re.I)
 TEXT_TOTAL = re.compile(r"\btotal(?:_steps|_epochs)?\s*[:=]\s*(\d{1,16})", re.I)
 ERROR_PATTERNS = (
@@ -142,7 +145,7 @@ def _command(argv, deadline, output_limit=COMMAND_LIMIT, timeout=3):
         for stream in (process.stdout, process.stderr):
             stream.close()
         if process.poll() is None:
-            # This is our short-lived observation child, never the training PID.
+            # This is our short-lived observation child, never the task PID.
             process.kill()
         try:
             process.wait(timeout=0.2)
@@ -294,7 +297,7 @@ def process_identity(pid):
     """Return a live process's identity, or raise OSError/ValueError/PilotError.
 
     Zombies are not live. macOS ps start times have one-second precision.
-    No kill(0), name matching, training execution, or project import is used.
+    No kill(0), name matching, task execution, or project import is used.
     """
     return _process_identity(pid, time.monotonic() + 6)
 
@@ -556,8 +559,11 @@ def _completion_field(contract, unit, runtime, timestamp, deadline):
     try:
         _remaining(deadline)
         spec = unit.get("completion")
-        if not spec:
+        if spec is None:
             return field(None, status="not_expected_yet", source=source, observed_at=timestamp)
+        if isinstance(spec, dict) and spec.get("kind") == "exit_code":
+            return field(None, status="not_expected_yet", source="supervised exit record",
+                         observed_at=timestamp)
         if not isinstance(spec, dict) or spec.get("kind") != "json":
             raise ValueError("only existing JSON completion reports are supported")
         required = spec.get("required_fields")
@@ -629,9 +635,11 @@ def _cursor_base(contract, unit, runtime, path):
 
 def _progress(line, doc):
     if isinstance(doc, dict):
-        key = "step" if "step" in doc else "epoch" if "epoch" in doc else None
+        key = next((name for name in ("step", "epoch", "current", "processed")
+                    if name in doc), None)
         if key and _finite(doc[key]):
-            total = doc.get("total", doc.get("total_epochs" if key == "epoch" else "total_steps"))
+            default_total = "total_epochs" if key == "epoch" else "total_steps"
+            total = doc.get("total", doc.get(default_total))
             if total is not None and (not _finite(total) or total < doc[key]):
                 raise ValueError("invalid progress total")
             phase = doc.get("phase")
@@ -1140,7 +1148,7 @@ def _collect_resources(contract, unit, runtime, process_field, timestamp, deadli
 
 
 def collect(contract, unit, runtime, state_dir):
-    """Observe once without writing state, changing training, or launching work.
+    """Observe once without writing state, changing tasks, or launching work.
 
     state_dir is accepted for the shared interface but is never created/read.
     One monotonic collection_timeout_seconds budget is shared by every probe,

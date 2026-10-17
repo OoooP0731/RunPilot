@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """One local attempt: execute reviewed argv once, wait, atomically record its exit.
 
-No retry, signal forwarding, training cancellation, shell expansion or scheduler.
+No retry, signal forwarding, task cancellation, shell expansion or scheduler.
 The request/manifest are private control records, never project-provided commands.
 """
 
@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 from core import (
-    Busy, PilotError, absolute, file_lock, identifier, now, read_json, write_json,
+    Busy, PilotError, absolute, file_lock, identifier, now, read_json, validate_env, write_json,
 )
 
 
@@ -59,11 +59,7 @@ def _request(path):
     ):
         raise PilotError("Supervisor requires unchanged structured argv")
     absolute(request.get("cwd"), "cwd")
-    env = request.get("env", {})
-    if not isinstance(env, dict) or not set(env) <= {
-        "CUDA_VISIBLE_DEVICES", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
-    } or not all(isinstance(v, str) and "\x00" not in v for v in env.values()):
-        raise PilotError("Invalid reviewed environment overrides")
+    validate_env(request.get("env", {}))
     for key, filename in (("manifest_path", "manifest.json"), ("exit_path", "exit.json"),
                           ("log_path", "output.log")):
         if request.get(key) != str(path.parent / filename):
@@ -106,7 +102,7 @@ def supervise(request_path):
                     record["identity"] = process_identity(child.pid)
                 except (OSError, ValueError, PilotError):
                     # Losing identity coverage must not stop waiting for the
-                    # child or turn the supervisor's exit into a training exit.
+                    # child or turn the supervisor's exit into a task exit.
                     record["identity"] = None
                 try:
                     write_json(manifest_path, dict(record, record_written_at=now()))

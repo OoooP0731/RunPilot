@@ -22,6 +22,27 @@ class ContractTests(unittest.TestCase):
     def test_minimal_observe_contract_needs_no_project_framework(self):
         self.assertEqual(validate_contract(minimal())["units"][0]["id"], "original")
 
+    def test_exit_code_completion_is_explicit_and_has_no_report_fields(self):
+        doc = minimal()
+        doc["units"][0]["completion"] = {"kind": "exit_code"}
+        self.assertEqual(validate_contract(doc)["units"][0]["completion"], {"kind": "exit_code"})
+        for bad in ({"kind": "exit_code", "path": "/old/report.json"},
+                    {"kind": "unknown"}, {}, "exit_code"):
+            doc["units"][0]["completion"] = bad
+            with self.subTest(completion=bad), self.assertRaises(PilotError):
+                validate_contract(doc)
+
+    def test_generic_environment_overrides_are_bounded_and_exclude_credentials(self):
+        doc = minimal()
+        doc["units"][0]["env"] = {"PYTHONUNBUFFERED": "1", "JOB_MODE": "export"}
+        validate_contract(doc)
+        for bad in ({"API_KEY": "never-store"}, {"AWS_ACCESS_KEY_ID": "no"},
+                    {"JOB MODE": "invalid"}, {"JOB_MODE": "a" * 4097},
+                    {"JOB_MODE": "\x00"}, {"JOB_MODE": 7}):
+            doc["units"][0]["env"] = bad
+            with self.subTest(env=bad), self.assertRaises(PilotError):
+                validate_contract(doc)
+
     def test_no_implicit_launch_authorization(self):
         doc = minimal()
         doc["allowed_actions"].append("launch")

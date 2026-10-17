@@ -110,6 +110,54 @@ class MonitorTests(unittest.TestCase):
         self.assertEqual(runtime["finished_at"], finish)
         self.assertGreater(runtime["record_written_at"], finish)
 
+    def test_explicit_exit_code_requires_managed_attributed_exit_not_pid_disappearance(self):
+        doc = copy.deepcopy(self.doc)
+        doc["execution_id"] = "generic-task"
+        doc["units"][0]["completion"] = {"kind": "exit_code"}
+        self.store.save_contract(doc)
+        runtime = self.store.unit("generic-task", "seed43")
+        runtime.update(execution_state="running", attempt=1,
+                       identity={"pid": 999, "start_time": "old", "boot_id": "fixture"})
+        self.store.save_unit("generic-task", "seed43", runtime)
+        missing = snapshot(alive=False)
+        check_once(self.store, "generic-task", fixture=missing)
+        self.assertEqual(self.store.unit("generic-task", "seed43")["execution_state"],
+                         "finished_unverified")
+        # A read-only attached process cannot use the supervised-exit policy,
+        # even if an external file claims a zero exit.
+        exited = snapshot(alive=False, code=0)
+        exited["fields"]["exit"]["value"]["execution_id"] = "generic-task"
+        check_once(self.store, "generic-task", fixture=exited)
+        self.assertEqual(self.store.unit("generic-task", "seed43")["execution_state"],
+                         "finished_unverified")
+        runtime = self.store.unit("generic-task", "seed43")
+        runtime.update(execution_state="running", managed=True)
+        self.store.save_unit("generic-task", "seed43", runtime)
+        check_once(self.store, "generic-task", fixture=exited)
+        self.assertEqual(self.store.unit("generic-task", "seed43")["execution_state"], "completed")
+
+    def test_explicit_exit_code_nonzero_is_failure_and_wrong_attempt_is_unverified(self):
+        doc = copy.deepcopy(self.doc)
+        doc["execution_id"] = "generic-task"
+        doc["units"][0]["completion"] = {"kind": "exit_code"}
+        self.store.save_contract(doc)
+        runtime = self.store.unit("generic-task", "seed43")
+        runtime.update(execution_state="running", attempt=1, managed=True,
+                       identity={"pid": 999, "start_time": "old", "boot_id": "fixture"})
+        self.store.save_unit("generic-task", "seed43", runtime)
+        wrong = snapshot(alive=False, code=0)
+        wrong["fields"]["exit"]["value"].update(execution_id="generic-task", attempt=2)
+        check_once(self.store, "generic-task", fixture=wrong)
+        self.assertEqual(self.store.unit("generic-task", "seed43")["execution_state"],
+                         "finished_unverified")
+        runtime = self.store.unit("generic-task", "seed43")
+        runtime["execution_state"] = "running"
+        self.store.save_unit("generic-task", "seed43", runtime)
+        failed = snapshot(alive=False, code=3)
+        failed["fields"]["exit"]["value"]["execution_id"] = "generic-task"
+        check_once(self.store, "generic-task", fixture=failed)
+        self.assertEqual(self.store.unit("generic-task", "seed43")["execution_state"], "failed")
+
     def test_exit_zero_does_not_override_failed_completion(self):
         doc = copy.deepcopy(self.doc)
         doc["execution_id"] = "completion-run"

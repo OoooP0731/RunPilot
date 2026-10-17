@@ -38,7 +38,7 @@ def _emit_event(store, contract, unit, runtime, kind, evidence, suffix=None, ana
          "actual_devices": runtime.get("actual_devices"), "observed_at": now(),
          "actual_devices_status": runtime.get("actual_devices_status", "unavailable"),
          "actual_devices_observed_at": runtime.get("actual_devices_observed_at"),
-         "action": "observe; no training configuration change or process signal"},
+         "action": "observe; no task configuration change or process signal"},
         _event_key(contract, unit, runtime, suffix or kind),
         notify=contract.get("notification", {}).get("kind", "none") != "none",
         analyze=enabled,
@@ -120,12 +120,18 @@ def apply_snapshot(store, contract, unit, runtime, snapshot):
             if exit_known and evalue["exit_code"] != 0:
                 runtime["execution_state"] = "failed"
             elif (
-                unit.get("completion")
+                (unit.get("completion") or {}).get("kind") == "exit_code"
+                and runtime.get("managed") is True and exit_known
+                and evalue["exit_code"] == 0
+            ):
+                runtime["execution_state"] = "completed"
+            elif (
+                (unit.get("completion") or {}).get("kind") == "json"
                 and _fresh(completion, timestamp, freshness) and cvalue.get("passed") is True
                 and cvalue.get("belongs_to_current") is True
             ):
                 runtime["execution_state"] = "completed"
-            elif unit.get("completion") and (
+            elif (unit.get("completion") or {}).get("kind") == "json" and (
                 completion.get("status") in {"parse_error", "not_expected_yet"}
                 or cvalue.get("passed") is False
             ):
@@ -416,7 +422,7 @@ def check_once(store, execution, fixture=None, deliver=True):
     if fixture is None and contract.get("target", {}).get("kind", "local") == "local":
         # A late supervisor receipt can arrive after the launch caller lost its
         # response. Reconcile metadata before interpreting missing identity or
-        # start time; this path never submits another training command.
+        # start time; this path never resubmits a task command.
         from run import reconcile
         for unit_id, runtime in store.units(execution).items():
             if (runtime.get("managed") and runtime["execution_state"] not in TERMINAL
@@ -523,7 +529,7 @@ def main(argv=None):
         emit({"status": "busy", "detail": str(error), "model_submissions": 0})
         return 0
     except (PilotError, OSError, ValueError) as error:
-        emit({"program_error": str(error), "training_failure": False})
+        emit({"program_error": str(error), "task_failure": False, "training_failure": False})
         return 2
     finally:
         if store is not None:

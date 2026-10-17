@@ -10,7 +10,7 @@ import re
 import sqlite3
 import time
 
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 SCHEMA_VERSION = 1
 TERMINAL = {"completed", "incomplete", "failed", "cancelled", "finished_unverified"}
 FIELD_STATES = {"ok", "unavailable", "not_expected_yet", "parse_error"}
@@ -18,10 +18,15 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")
 SECRET_FLAG = re.compile(
     r"(?i)(?:^|[-_])(password|passwd|secret|token|api[-_]?key|private[-_]?key)(?:$|=)"
 )
+ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+SECRET_ENV = re.compile(
+    r"(?i)(?:^|_)(password|passwd|secret|token|api_key|private_key|"
+    r"access_key|credential|auth_key)(?:$|_)"
+)
 
 
 class PilotError(Exception):
-    """A user-facing refusal or invalid input, not a training failure."""
+    """A user-facing refusal or invalid input, not a task failure."""
 
 
 class Busy(PilotError):
@@ -112,10 +117,23 @@ def number(value, label, minimum=0):
     return value
 
 
+def validate_env(env):
+    """Allow reviewed Python-task overrides, never persist obvious credentials."""
+    if not isinstance(env, dict) or len(env) > 64:
+        raise PilotError("unit.env must be an object with at most 64 variables")
+    if not all(
+        isinstance(key, str) and ENV_NAME.fullmatch(key) and not SECRET_ENV.search(key)
+        and isinstance(value, str) and "\x00" not in value and len(value) <= 4096
+        for key, value in env.items()
+    ):
+        raise PilotError("unit.env needs simple names and bounded string values; no secret variables")
+    return env
+
+
 def validate_contract(doc):
     if not isinstance(doc, dict) or doc.get("schema_version") != SCHEMA_VERSION:
         raise PilotError("Unsupported contract schema_version; expected 1")
-    identifier(doc.get("execution_id"), "execution_id (private handle, not a research Run ID)")
+    identifier(doc.get("execution_id"), "execution_id (private RunPilot handle)")
     absolute(doc.get("project"), "project")
     target = doc.get("target", {"kind": "local"})
     if not isinstance(target, dict):
@@ -180,13 +198,7 @@ def validate_contract(doc):
             raise PilotError("unit.depends_on must be an array")
         if not all(isinstance(v, str) for v in unit.get("depends_on", [])):
             raise PilotError("unit.depends_on must contain unit identifiers")
-        env = unit.get("env", {})
-        if not isinstance(env, dict) or not set(env) <= {
-            "CUDA_VISIBLE_DEVICES", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
-        }:
-            raise PilotError("Only explicit CUDA_VISIBLE_DEVICES/OMP_NUM_THREADS/MKL_NUM_THREADS overrides are supported")
-        if not all(isinstance(v, str) and "\x00" not in v for v in env.values()):
-            raise PilotError("unit.env values must be strings")
+        validate_env(unit.get("env", {}))
         if not isinstance(unit.get("resources", {}), dict):
             raise PilotError("unit.resources must be an object")
         for resource, value in unit.get("resources", {}).items():
@@ -204,11 +216,15 @@ def validate_contract(doc):
                 or not set(unit_devices) <= set(devices)):
             raise PilotError("unit.devices must be a subset of approved devices")
         completion = unit.get("completion")
-        if completion:
+        if completion is not None:
             if not isinstance(completion, dict):
                 raise PilotError("completion must be an object")
+            if completion.get("kind") == "exit_code":
+                if set(completion) != {"kind"}:
+                    raise PilotError("exit_code completion accepts only kind; it is for supervised launches")
+                continue
             if completion.get("kind") != "json":
-                raise PilotError("Only an explicitly mapped existing JSON completion report is supported")
+                raise PilotError("completion.kind must be exit_code or json")
             absolute(completion.get("path"), "completion.path")
             required = completion.get("required_fields", [])
             if not isinstance(required, list) or not required or not all(isinstance(v, str) and v for v in required):

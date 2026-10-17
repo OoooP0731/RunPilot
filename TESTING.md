@@ -1,11 +1,37 @@
-# RunPilot v0.1.0 验证记录
+# RunPilot 测试与验证
+
+## v0.1.1 — 2026-10-17
+
+在本机 macOS 复测；以下均为合成/CPU 任务，不是生产环境或 GPU 兼容性认证。原始本地日志位于被 `.gitignore` 排除的 `run-pilot-workspace/validation/`，公开仓库提供可复跑源码与摘要。
+
+| 检查 | 实际结果 |
+| --- | --- |
+| Python 3.9.6 | 129 项 unittest 通过 |
+| Python 3.12.14 | 同 129 项通过 |
+| 无 mock 的本地 CLI 闭环（两版本） | 现有 JSON 报告任务与普通 Python CSV 导出脚本均完成；真实退出 0、完成事件文件已投递，直接模型提交为 0 |
+| 通用任务回归 | 普通入口静态识别、通用进度解析、受约束环境变量覆盖、长运行进程只读观察、`exit_code` 成功/失败/缺回执/只读接管边界 |
+| 安装体 | YAML、内部引用、Python 语法检查通过；12 文件 ZIP CRC、逐文件源码一致性与解包后独立 CLI 检查通过；SHA-256 见 `dist/run-pilot.skill.sha256` |
+
+可复跑 v0.1.1：
+
+```sh
+make test
+make validate
+make build
+python3 tools/verify_local_runtime.py
+(cd dist && shasum -a 256 -c run-pilot.skill.sha256)
+```
+
+本版新增第 4 个普通 Python 任务的**离线决策用例**，但尚未运行新的技能对照评测；下面的 18/18 与 17/18 只属于 v0.1.0 的三组历史用例，不能挪作 v0.1.1 的结果。真实 NVIDIA GPU、跨卡并发、Linux 实机、SSH、远程调度及后台定时器均未通过本次验证；其中 SSH/远程启动、自动 retry/resume 和调度器安装是**尚未实现**，而非仅“未实测”。
+
+## v0.1.0（历史记录）
 
 验证日期：2026-10-17，Asia/Shanghai。真实执行环境为本机 macOS；
 下面的 Linux/NVIDIA 相关检查使用合成 fixture，不是训练机兼容性认证。
 表内 `run-pilot-workspace/` 路径指向本地原始证据，包含本机路径与执行记录，
 不纳入公开仓库；公开仓库保留复跑命令、测试和结果摘要。
 
-## 1. 已运行且通过
+### 1. 已运行且通过
 
 | 检查 | 结果 | 证据 |
 | --- | --- | --- |
@@ -16,7 +42,7 @@
 | 归档构建 | 12 个文件，排除评测和缓存，ZIP 校验与 SHA-256 | `dist/run-pilot.skill` 及 `.sha256` |
 | 离线决策输出格式 | 6 份 JSON/Markdown 全部通过 | 各 run 的 `format_grading.json` |
 
-可复跑：
+复现以下历史数字请先检出 `v0.1.0`；在当前 `main` 上执行这些命令得到的是 v0.1.1 的结果：
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -58,7 +84,7 @@ python3 tools/grade_eval_format.py run-pilot-workspace/iteration-1
 6. actual_gpu=null，没有把空候选设备或 CPU fixture 冒充实际 GPU 使用。
 7. 临时状态、工作进程及产物收尾，不修改实际训练项目。
 
-## 2. 离线技能对照
+### 2. 离线技能对照
 
 文件：
 
@@ -88,7 +114,7 @@ python3 tools/grade_eval_format.py run-pilot-workspace/iteration-1
 
 未运行描述触发优化，也未收取/伪造用户评审反馈；页面可供后续人工复核。
 
-## 3. 未实现与未验证分别列出
+### 3. 未实现与未验证分别列出
 
 **未实现**：
 

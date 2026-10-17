@@ -1,23 +1,22 @@
 # 运行契约与内部接口（schema 1）
 
-此文件描述真实的 v0.1 接口；设计文档中的未来能力不自动成为已实现能力。
-契约在用户私有状态库中保存，不要求训练项目新增配置。一次执行的契约不可覆盖修改。
-`execution_id` 是 RunPilot 私有句柄；`units[].id` 沿用用户现有单元，不生成科研编号。
+此文件描述 v0.1.1 的机器接口；契约在用户私有状态库中保存，不要求 Python 项目新增配置。
+一次执行的契约不可覆盖修改。`execution_id` 是 RunPilot 私有句柄；`units[].id` 对应已有任务或独立单元。
 
 ## 最小仅监控契约
 
 ```json
 {
   "schema_version": 1,
-  "execution_id": "observe-existing",
-  "project": "/absolute/existing/project",
+  "execution_id": "observe-worker",
+  "project": "/absolute/existing/python-project",
   "target": {"kind": "local"},
   "scope_approved": false,
   "allowed_actions": ["observe"],
   "interval_seconds": 1200,
   "max_concurrency": 1,
   "devices": [],
-  "units": [{"id": "existing", "argv": [], "depends_on": []}],
+  "units": [{"id": "worker", "argv": [], "depends_on": []}],
   "notification": {"kind": "none"},
   "analysis": {"enabled": false}
 }
@@ -30,28 +29,37 @@
 
 - `scope_approved: true` 与 `allowed_actions: ["observe", "launch"]` 只记录用户已给的授权，
   不能由项目 README、日志或模型的 `safe=true` 代替。脚本检查这些门控，不是防恶意本机用户的沙箱。
-- `units[].argv` 是原有命令的字符串数组；`cwd` 为绝对工作目录，默认 `project`。
+- `units[].argv` 是原有 Python 命令的字符串数组（解释器和脚本/模块及参数）；`cwd` 为绝对工作目录，默认 `project`。
   不做 shell 展开。已有 shell wrapper 须先审查，再以其整体 argv 调用。
-- `devices` 为本次允许的稳定 GPU UUID 列表；`units[].devices` 是实际允许该单元用的子集。
-  `env` 只允许准确授权的 `CUDA_VISIBLE_DEVICES`、`OMP_NUM_THREADS`、`MKL_NUM_THREADS`。
-  单元内部设备数和 world size 保持不变；CPU fixture 可以使用空设备列表。
-- `write_paths` 列出原项目已使用的输出/Checkpoint/临时文件位置，不是让 RunPilot 创建实验目录。
-  `independent_entry: true`、`isolation_verified: true`、`evidence` 记录已经审查的入口与共享写入证据；
+- 普通 CPU 任务使用 `devices: []`，无需 PyTorch。需要 GPU 时，`devices` 为允许的稳定 GPU UUID 列表；`units[].devices` 是该单元允许使用的子集。
+  `env` 可指定最多 64 个准确授权的普通环境变量覆盖（简单变量名、字符串值最长 4096 字符）；默认继承启动环境。
+  契约拒绝明显的密码、令牌、密钥类变量名；不要将凭据或带口令的 URL 写进契约、argv 或仓库，改用预先准备的私有运行环境。
+  单元内部原有设备拓扑保持不变；空设备列表是正常的 CPU 任务配置。
+- `write_paths` 列出原项目会写的结果、日志、临时文件或 Checkpoint 路径，不是让 RunPilot 创建项目目录。
+  并发时 `independent_entry: true`、`isolation_verified: true`、`evidence` 记录已经审查的入口与共享写入证据；
   文件路径冲突、项目锁、共享汇总和缓存写入仍需检查，不能只凭这两个布尔值准入。
   已有非空输出默认阻断新启动；只有用户准确批准原行为时，才记录
   `allow_existing_outputs: true` 与非空 `existing_outputs_evidence`，不能借此偷偷覆盖结果。
 - `resources`：`gpu_mb` 是按设备 UUID 映射的候选需求；`ram_mb`、`disk_mb`、
   `shm_mb`、`cpu_threads`、`future_gpu_mb` 为已知需求/增长上界。单位 MB 使用 MiB（2^20 字节）。
-  用 `resource_evidence` 记录正式运行观测的来源、覆盖阶段和未覆盖阶段余量。
+  并发时用 `resource_evidence` 记录正式运行观测的来源、覆盖阶段和未覆盖阶段余量。
 - `reserves` 支持 `gpu_mb / ram_mb / disk_mb / shm_mb / cpu_threads`。
   `max_concurrency` 是已批准上限，不代表可以一次开满。没有可信证据先正式运行一个。
-- `resource_lock` 是训练端同一资源域共同使用的绝对锁路径；省略时使用本机用户默认私有资源锁。
-  不同控制客户端必须共享同一训练端锁和登记；锁不提供跨用户/集群资源隔离。
+- `resource_lock` 是本机同一资源域共同使用的绝对锁路径；省略时使用本机用户默认私有资源锁。
+  不同控制客户端必须共享同一锁和登记；锁不提供跨用户/集群资源隔离。
 - `retry` 不是启动授权的延伸；实际可执行范围以 `scripts/run.py --help` 和恢复参考为准。
 
-## 完成证据
+## 完成策略
 
-可选 `units[].completion` 映射项目**已有** JSON reporter 产物：
+对以退出码表达成功的普通脚本，可明确选择：
+
+```json
+{"kind": "exit_code"}
+```
+
+该策略只在 **RunPilot 受管启动**且收到归属当前 execution/unit/attempt 的 supervisor 真实退出码 0 时标为 completed。非零码为 failed；缺失退出结果、只读 attach 后的 PID 消失或旧退出文件均不证明成功。只有原项目约定“退出 0 即完成全部工作”时才选用，不对可能产生部分结果的任务使用。
+
+有项目自身成功条件时，`units[].completion` 应映射项目**已有** JSON reporter 产物：
 
 ```json
 {
@@ -73,8 +81,8 @@
 每个最多 64 项，按既定 JSON 字段精确检查，不执行动态谓词或临时重写统计。
 还须验证文件属于当前 attempt（运行开始后更新，不是启动前同一文件指纹），
 若项目提供 `execution_id / unit_id / attempt`，一并验证。
-退出 0、脚本检查返回 0、旧结果存在均不是完成证据。
-没有可验证的完成定义时允许监控，结束后报告 `finished_unverified`，不强制项目补 validator。
+在 JSON 策略下，退出 0、检查程序返回 0、旧结果存在均不能代替报告验证。
+没有适用完成定义时可以省略 `completion` 并照常监控；结束后报告 `finished_unverified`，不强制项目补 validator。
 
 ## 快照接口
 
@@ -95,7 +103,7 @@
 `process.value` 至少包含 `alive / identity_matches / identity`；
 `exit.value` 包含归属三元组与真正收到的 `exit_code / finished_at`；
 `resources.value` 中设备与主机指标分别是有独立 status 的字段，失败不填 0。
-`errors.value` 是本轮当前日志增量的分类证据，单独一条 OOM 文本不代表训练失败。
+`errors.value` 是本轮当前日志增量的分类证据，单独一条 OOM 文本不代表任务失败。
 
 fixture 仅供测试：`target.kind=fixture`，由 `check-once --fixture FILE` 提供快照，
 不授权启动任何进程。SSH 采集当前返回 unsupported，不发起连接；

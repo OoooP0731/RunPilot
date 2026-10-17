@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise the real local CLI with a tiny CPU-only synthetic worker, no mocks.
+"""Exercise the real local CLI with small CPU-only Python workers, no mocks.
 
-This is RunPilot's own implementation test, not a new training/smoke task in a
-user's project. All worker/state/output files live in one temporary directory.
+This is RunPilot's own implementation test, not a new task in a user's
+project. All worker/state/output files live in one temporary directory.
 """
 
 import argparse
@@ -91,17 +91,81 @@ def verify():
             raise RuntimeError("Incorrect exit/model accounting")
         if checked["needs_scheduler"] or any(item["status"] != "delivered" for item in status["outbox"]):
             raise RuntimeError("Completion outbox did not finish")
+        export = root / "export.py"
+        output = root / "output.csv"
+        export.write_text(
+            "import sys,time\n"
+            "print('{\"phase\":\"export\",\"current\":1,\"total\":1}',flush=True)\n"
+            "time.sleep(0.25)\n"
+            "with open(sys.argv[1],'w') as f: f.write('name,value\\nexample,1\\n')\n",
+            encoding="utf-8",
+        )
+        generic_inspection = command("inspect_project.py", ["--project", str(root)])
+        if not any(item["path"] == "export.py" for item in generic_inspection["candidates"]):
+            raise RuntimeError("Ordinary Python entry was not identified")
+        generic = {
+            **contract, "execution_id": "generic-integration",
+            "units": [{
+                "id": "export", "argv": [sys.executable, str(export), str(output)],
+                "write_paths": [str(output)], "devices": [],
+                "resources": {"ram_mb": 1, "disk_mb": 1, "cpu_threads": 1},
+                "completion": {"kind": "exit_code"},
+            }],
+            "notification": {"kind": "file", "path": str(root / "generic-notifications")},
+        }
+        generic_path = root / "generic-contract.json"
+        generic_path.write_text(json.dumps(generic), encoding="utf-8")
+        generic_args = ["--state-dir", str(state), "--execution", "generic-integration"]
+        command("run.py", ["init", "--contract", str(generic_path), "--state-dir", str(state)])
+        generic_dry = command("run.py", ["launch"] + generic_args + ["--unit", "export", "--dry-run"])
+        if not generic_dry.get("allowed") or generic_dry.get("task_started") is not False:
+            raise RuntimeError("Generic dry-run started a task")
+        command("run.py", ["launch"] + generic_args + ["--unit", "export"])
+        deadline = time.monotonic() + 15
+        generic_check, generic_status = None, None
+        while time.monotonic() < deadline:
+            generic_check = command("monitor.py", ["check-once"] + generic_args)
+            generic_status = command("monitor.py", ["status"] + generic_args)
+            if generic_status["units"]["export"]["execution_state"] == "completed":
+                break
+            time.sleep(0.1)
+        generic_runtime = generic_status["units"]["export"]
+        if (generic_runtime["execution_state"] != "completed"
+                or generic_runtime["exit_result"]["exit_code"] != 0
+                or output.read_text(encoding="utf-8") != "name,value\nexample,1\n"
+                or generic_check["needs_scheduler"]
+                or any(item["status"] != "delivered" for item in generic_status["outbox"])
+                or generic_check["model_submissions"]):
+            raise RuntimeError("Generic Python CLI loop did not complete and deliver")
+        def delivered_kinds(directory):
+            return sorted(
+                json.loads(path.read_text(encoding="utf-8"))["kind"]
+                for path in directory.glob("*.json")
+            )
+        if ("completed" not in delivered_kinds(root / "notifications")
+                or "completed" not in delivered_kinds(root / "generic-notifications")):
+            raise RuntimeError("A completed event notification was not delivered")
         return {
             "passed": True, "mocked_probes": False, "python": sys.version.split()[0],
             "static_inspection_executed_project": False,
+            "dry_run_started_task": dry["task_started"],
             "dry_run_started_training": dry["training_started"],
             "launch_status": launched["status"], "execution_state": runtime["execution_state"],
             "attempt": runtime["attempt"], "exit_code": runtime["exit_result"]["exit_code"],
             "model_submissions": checked["model_submissions"],
             "notifications": len(list((root / "notifications").glob("*.json"))),
+            "notification_kinds": delivered_kinds(root / "notifications"),
             "needs_scheduler": checked["needs_scheduler"],
             "actual_gpu": runtime.get("actual_devices"),
-            "scope": "temporary synthetic CPU worker only; no PyTorch/GPU/SSH/services",
+            "generic_script": {
+                "kind": "Python CSV export without PyTorch or a JSON report",
+                "execution_state": generic_runtime["execution_state"],
+                "exit_code": generic_runtime["exit_result"]["exit_code"],
+                "notifications": len(list((root / "generic-notifications").glob("*.json"))),
+                "notification_kinds": delivered_kinds(root / "generic-notifications"),
+                "model_submissions": generic_check["model_submissions"],
+            },
+            "scope": "temporary synthetic CPU workers only; no GPU/SSH/services",
             "temporary_files_removed_after_check": True,
         }
 
