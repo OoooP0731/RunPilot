@@ -186,7 +186,12 @@ def apply_snapshot(store, contract, unit, runtime, snapshot):
             current = progress["value"]
             previous = runtime.get("previous_progress")
             runtime["previous_progress"] = {"value": current, "at": timestamp}
-            if previous and current.get("phase") == previous["value"].get("phase"):
+            if previous and (
+                current.get("phase"), current.get("label"), current.get("work_kind")
+            ) == (
+                previous["value"].get("phase"), previous["value"].get("label"),
+                previous["value"].get("work_kind"),
+            ):
                 delta = (current.get("step") or 0) - (previous["value"].get("step") or 0)
                 elapsed = timestamp - previous["at"]
                 if delta > 0 and elapsed > 0:

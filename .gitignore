@@ -11,6 +11,8 @@ __pycache__/
 run-pilot-workspace/
 # Historical trial notes reference a private local attachment.
 RunPilot-trial-review-2026-10-16.md
+# Owner-only run reviews are local working notes, not release artifacts.
+RunPilot-log-*.md
 # Keep local credentials out of future commits.
 .env
 .env.*

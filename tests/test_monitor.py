@@ -75,6 +75,23 @@ class MonitorTests(unittest.TestCase):
             self.assertEqual(result["events"], 0)
         self.assertEqual(self.store.event_rows("fixture-run"), [])
 
+    def test_progress_rate_resets_when_label_or_work_kind_changes(self):
+        first = snapshot()
+        first["fields"]["progress"]["value"].update(label="fold1", step=2)
+        self.check(first)
+        second = snapshot()
+        second["fields"]["progress"]["value"].update(label="fold2", step=3)
+        self.check(second)
+        self.assertNotIn("phase_rate", self.store.unit("fixture-run", "seed43"))
+        third = snapshot()
+        third["fields"]["progress"]["value"].update(label="fold2", step=4)
+        self.check(third)
+        self.assertIn("phase_rate", self.store.unit("fixture-run", "seed43"))
+        fourth = snapshot()
+        fourth["fields"]["progress"]["value"].update(label="fold2", step=5, work_kind="epoch")
+        self.check(fourth)
+        self.assertNotIn("phase_rate", self.store.unit("fixture-run", "seed43"))
+
     def test_unreachable_preserves_execution_and_deduplicates(self):
         data = snapshot(reachable=False)
         self.check(data)

@@ -1,6 +1,6 @@
 # 运行契约与内部接口（schema 1）
 
-此文件描述 v0.1.2 的机器接口；契约在用户私有状态库中保存，不要求 Python 项目新增配置。
+此文件描述 v0.1.3 的机器接口；契约在用户私有状态库中保存，不要求 Python 项目新增配置。
 一次执行的契约不可覆盖修改。`execution_id` 是 RunPilot 私有句柄；`units[].id` 对应已有任务或独立单元。
 
 ## 最小仅监控契约
@@ -48,6 +48,24 @@
 - `resource_lock` 是本机同一资源域共同使用的绝对锁路径；省略时使用本机用户默认私有资源锁。
   不同控制客户端必须共享同一锁和登记；锁不提供跨用户/集群资源隔离。
 - `retry` 不是启动授权的延伸；实际可执行范围以 `scripts/run.py --help` 和恢复参考为准。
+
+## 可选进度映射（不参与完成验收）
+
+项目**已有** JSON 进度文件，但日志未包含通用 `step/epoch` 时，可给该单元声明一个只读映射；字段路径只按 JSON 对象的点分段读取，不运行表达式或项目代码。示例是字段结构示意，须按原项目实有字段调整：
+
+```json
+{
+  "kind": "json",
+  "path": "/absolute/existing/progress.json",
+  "step_field": "current.epoch",
+  "total": 50,
+  "phase_field": "current.phase",
+  "label_field": "current.fold",
+  "work_kind": "epoch"
+}
+```
+
+存入 `units[].progress`。`step_field` 必需；`total` 常数和 `total_field` 二选一或都省略；`phase_field`、`label_field`、`work_kind` 可省略。`label` 可表示 fold、批次或其他现有阶段；标签/工作类型变化时重新估计速率。只读最多 1 MiB 的普通 JSON 文件，拒绝不合法数值、旧于当前任务的文件和已有归属字段冲突；文件缺失时仍可从任务日志解析进度。进度仅供观察，不证明成功或允许启动更多任务。
 
 ## 完成策略
 

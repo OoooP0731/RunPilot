@@ -43,6 +43,26 @@ class ContractTests(unittest.TestCase):
             with self.subTest(env=bad), self.assertRaises(PilotError):
                 validate_contract(doc)
 
+    def test_existing_json_progress_mapping_is_bounded_and_optional(self):
+        doc = minimal()
+        mapping = {
+            "kind": "json", "path": "/synthetic/progress.json",
+            "step_field": "current.epoch", "total": 50,
+            "phase_field": "current.phase", "label_field": "current.fold",
+            "work_kind": "epoch",
+        }
+        doc["units"][0]["progress"] = mapping
+        self.assertEqual(validate_contract(doc)["units"][0]["progress"], mapping)
+        for change in (
+            {"path": "relative.json"}, {"step_field": "current..epoch"},
+            {"total": True}, {"total_field": "total_epochs"},
+            {"phase_field": "current.phase[0]"}, {"command": "python validate.py"},
+            {"work_kind": "epoch;run"},
+        ):
+            doc["units"][0]["progress"] = dict(mapping, **change)
+            with self.subTest(change=change), self.assertRaises(PilotError):
+                validate_contract(doc)
+
     def test_no_implicit_launch_authorization(self):
         doc = minimal()
         doc["allowed_actions"].append("launch")

@@ -10,7 +10,7 @@ import re
 import sqlite3
 import time
 
-VERSION = "0.1.2"
+VERSION = "0.1.3"
 SCHEMA_VERSION = 1
 TERMINAL = {"completed", "incomplete", "failed", "cancelled", "finished_unverified"}
 FIELD_STATES = {"ok", "unavailable", "not_expected_yet", "parse_error"}
@@ -190,6 +190,31 @@ def validate_contract(doc):
         for key in ("log_path", "exit_path"):
             if key in unit:
                 absolute(unit[key], "unit." + key)
+        progress = unit.get("progress")
+        if progress is not None:
+            if (not isinstance(progress, dict) or progress.get("kind") != "json"
+                    or set(progress) - {
+                        "kind", "path", "step_field", "total_field", "total",
+                        "phase_field", "label_field", "work_kind",
+                    }):
+                raise PilotError("unit.progress accepts only a bounded existing JSON field mapping")
+            absolute(progress.get("path"), "unit.progress.path")
+            for key in ("step_field", "total_field", "phase_field", "label_field"):
+                if key == "step_field" or key in progress:
+                    name = progress.get(key)
+                    if (not isinstance(name, str) or len(name) > 128
+                            or not all(re.fullmatch(r"[A-Za-z0-9_-]{1,64}", part)
+                                       for part in name.split("."))):
+                        raise PilotError("unit.progress.%s must be a short dotted JSON field" % key)
+            if "total" in progress:
+                number(progress["total"], "unit.progress.total", 1)
+            if "total" in progress and "total_field" in progress:
+                raise PilotError("unit.progress.total and total_field are alternatives")
+            if "work_kind" in progress and (
+                not isinstance(progress["work_kind"], str)
+                or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,31}", progress["work_kind"])
+            ):
+                raise PilotError("unit.progress.work_kind must be a short label")
         if not isinstance(unit.get("write_paths", []), list):
             raise PilotError("write_paths must be an array")
         for path in unit.get("write_paths", []):

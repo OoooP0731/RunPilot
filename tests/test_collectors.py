@@ -117,6 +117,20 @@ class CollectorTests(unittest.TestCase):
         self.write_json(self.exit, dict(self.exit_doc(), finished_at=self.runtime["started_at"] - 1))
         self.assertEqual(self.collect()["exit"]["status"], "parse_error")
 
+    def test_exit_and_first_live_sample_recheck_process_before_alarm(self):
+        self.write_json(self.exit, self.exit_doc())
+        self.runtime["identity"] = {"pid": 1234, "start_time": "1", "boot_id": "boot"}
+        live = field({"alive": True, "identity_matches": True, "identity": self.runtime["identity"]})
+        dead = field({"alive": False, "identity_matches": False, "identity": None})
+        with patch.object(collectors, "_process_field", side_effect=[live, dead]) as probe:
+            fields = self.collect()
+        self.assertEqual(probe.call_count, 2)
+        self.assertFalse(fields["process"]["value"]["alive"])
+        with patch.object(collectors, "_process_field", side_effect=[live, live]) as probe:
+            fields = self.collect()
+        self.assertEqual(probe.call_count, 2)
+        self.assertTrue(fields["process"]["value"]["alive"], "a real contradiction stays visible")
+
     def test_runtime_log_and_exit_paths_override_unit(self):
         self.log.write_text("CUDA out of memory\nstep 999/999\n")
         self.write_json(self.exit, dict(self.exit_doc(), exit_code=99))
@@ -316,6 +330,44 @@ class CollectorTests(unittest.TestCase):
         progress = self.collect()["progress"]["value"]
         self.assertEqual(progress["step"], 3)
         self.assertEqual(progress["work_kind"], "processed")
+
+    def test_declared_json_progress_normalizes_existing_nested_fields(self):
+        path = self.root / "progress.json"
+        self.unit["progress"] = {
+            "kind": "json", "path": str(path), "step_field": "current.epoch",
+            "total": 50, "phase_field": "current.phase",
+            "label_field": "current.fold", "work_kind": "epoch",
+        }
+        self.log.write_text("step 999/999\n")
+        self.write_json(path, {"current": {"epoch": 7, "phase": "train", "fold": 2}})
+        item = self.collect()["progress"]
+        self.assertEqual(item["status"], "ok")
+        self.assertEqual(item["source"], str(path))
+        self.assertEqual(item["value"], {
+            "step": 7, "total": 50, "phase": "train", "label": "2", "work_kind": "epoch",
+        })
+        self.write_json(path, {"current": {"epoch": 8, "phase": "train", "fold": 3}})
+        self.assertEqual(self.collect()["progress"]["value"]["label"], "3")
+
+    def test_progress_mapping_never_reuses_old_or_conflicting_evidence(self):
+        path = self.root / "progress.json"
+        self.unit["progress"] = {
+            "kind": "json", "path": str(path), "step_field": "step",
+            "total_field": "total", "phase_field": "phase",
+        }
+        self.log.write_text("step 2/10\n")
+        self.assertEqual(self.collect()["progress"]["value"]["step"], 2)  # absent JSON: log fallback
+        self.write_json(path, {"step": 3, "total": 10, "phase": "export"})
+        os.utime(path, (self.runtime["started_at"] - 1, self.runtime["started_at"] - 1))
+        self.assertEqual(self.collect()["progress"]["status"], "unavailable")
+        self.write_json(path, {"execution_id": "old", "step": 3, "total": 10, "phase": "export"})
+        self.assertEqual(self.collect()["progress"]["status"], "unavailable")
+        for value in ({"step": True, "total": 10}, {"step": 11, "total": 10},
+                      {"step": 3, "total": 10, "phase": {"unexpected": "object"}}):
+            self.write_json(path, value)
+            self.assertEqual(self.collect()["progress"]["status"], "parse_error")
+        self.write_json(path, {"step": 4, "total": 10, "phase": "export"})
+        self.assertEqual(self.collect()["progress"]["value"]["step"], 4)
 
     def test_rotation_does_not_join_old_partial_with_new_file(self):
         self.log.write_text("CUDA out of")

@@ -58,6 +58,14 @@ class PolicyTests(unittest.TestCase):
         states["seed43"]["resource_observations"] = 2
         self.assertTrue(admission(doc, doc["units"][1], states, data)["allowed"])
 
+    def test_default_concurrency_stays_serial_despite_sufficient_gpu_memory(self):
+        doc, states, data = inputs()
+        doc.pop("max_concurrency")  # No user-approved parallel upper bound.
+        states["seed43"].update(execution_state="running", resource_observations=3)
+        result = admission(doc, doc["units"][1], states, data)
+        self.assertFalse(result["allowed"])
+        self.assertTrue(any("concurrency limit" in reason for reason in result["reasons"]))
+
     def test_only_memory_division_is_not_sufficient(self):
         doc, states, data = inputs()
         states["seed43"].update(execution_state="running", resource_observations=3)

@@ -662,6 +662,53 @@ def _progress(line, doc):
             "work_kind": kind.lower()}
 
 
+def _progress_file_field(contract, unit, runtime, timestamp, deadline):
+    """Read one existing progress JSON as observation only, never completion evidence."""
+    spec = unit["progress"]
+    source = spec["path"]
+    try:
+        _remaining(deadline)
+        data, info, _ = _report_bytes(source)
+        doc = _json(data)
+        if not isinstance(doc, dict):
+            raise ValueError("progress source must be a JSON object")
+        started = runtime.get("started_at")
+        if not _finite(started, minimum=0.000001) or info.st_mtime < started:
+            return _failure("progress file is not fresh relative to current task", source, timestamp)
+        if not _attribution_matches(doc, contract, unit, runtime):
+            return _failure("progress attribution conflicts with current attempt", source, timestamp)
+        step = _lookup(doc, spec["step_field"])
+        if not _finite(step):
+            raise ValueError("mapped progress step must be a nonnegative finite number")
+        total = _lookup(doc, spec["total_field"]) if "total_field" in spec else spec.get("total")
+        if total is not None and (not _finite(total, minimum=1) or step > total):
+            raise ValueError("mapped progress total must be finite and >= step")
+        phase = _lookup(doc, spec["phase_field"]) if "phase_field" in spec else None
+        if phase is not None and (
+            not isinstance(phase, str) or not phase or len(phase) > 128
+        ):
+            raise ValueError("mapped progress phase must be a short string")
+        label = _lookup(doc, spec["label_field"]) if "label_field" in spec else None
+        if label is not None and (
+            isinstance(label, bool) or not isinstance(label, (str, int))
+            or not str(label) or len(str(label)) > 128
+        ):
+            raise ValueError("mapped progress label must be a short string or integer")
+        value = {
+            "step": step, "total": total, "phase": phase,
+            "work_kind": spec.get("work_kind", "step"),
+        }
+        if "label_field" in spec:
+            value["label"] = str(label) if label is not None else None
+        return field(value, source=source, observed_at=timestamp, source_updated_at=info.st_mtime)
+    except FileNotFoundError:
+        return field(None, status="not_expected_yet", source=source, observed_at=timestamp)
+    except (ValueError, UnicodeError, RecursionError, KeyError) as error:
+        return _failure(error, source, timestamp, "parse_error")
+    except (OSError, PilotError) as error:
+        return _failure(error, source, timestamp)
+
+
 def _log_fields(contract, unit, runtime, timestamp, deadline):
     cursor = dict(runtime.get("log_cursor") or {})
     source = "current-attempt log"
@@ -1179,9 +1226,19 @@ def collect(contract, unit, runtime, state_dir):
                 "fields": fields, "log_cursor": dict(runtime.get("log_cursor") or {})}
     fields = {"process": _process_field(runtime, timestamp, deadline)}
     fields["exit"] = _exit_field(contract, unit, runtime, timestamp, deadline)
+    if (fields["exit"]["status"] == "ok" and fields["process"]["status"] == "ok"
+            and (fields["process"].get("value") or {}).get("alive") is True):
+        # The child may exit between the first identity sample and its supervisor
+        # receipt becoming visible. Recheck instead of emitting a transient
+        # "live process plus exit" alarm; a real conflict stays visible.
+        fields["process"] = _process_field(runtime, now(), deadline)
     fields["log"], fields["progress"], fields["errors"], cursor = _log_fields(
         contract, unit, runtime, timestamp, deadline,
     )
+    if unit.get("progress") is not None:
+        mapped = _progress_file_field(contract, unit, runtime, timestamp, deadline)
+        if mapped["status"] != "not_expected_yet" or fields["progress"]["status"] != "ok":
+            fields["progress"] = mapped
     fields["completion"] = _completion_field(contract, unit, runtime, timestamp, deadline)
     fields["resources"] = _collect_resources(contract, unit, runtime, fields["process"], timestamp, deadline)
     return {"observed_at": timestamp, "reachable": True, "fields": fields, "log_cursor": cursor}
