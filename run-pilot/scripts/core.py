@@ -10,7 +10,7 @@ import re
 import sqlite3
 import time
 
-VERSION = "0.1.3"
+VERSION = "0.1.4"
 SCHEMA_VERSION = 1
 TERMINAL = {"completed", "incomplete", "failed", "cancelled", "finished_unverified"}
 FIELD_STATES = {"ok", "unavailable", "not_expected_yet", "parse_error"}

@@ -1,6 +1,6 @@
 # 运行契约与内部接口（schema 1）
 
-此文件描述 v0.1.3 的机器接口；契约在用户私有状态库中保存，不要求 Python 项目新增配置。
+此文件描述当前机器接口（schema 1），不包含内置 SSH 或任意业务指标采集接口。契约在用户私有状态库中保存，不要求 Python 项目新增配置。
 一次执行的契约不可覆盖修改。`execution_id` 是 RunPilot 私有句柄；`units[].id` 对应已有任务或独立单元。
 
 ## 最小仅监控契约
@@ -24,6 +24,7 @@
 
 先只读识别、展示接管摘要；将契约存入私有库后，再 `attach` 指定进程。
 保存契约不等于批准启动。示例路径、设备和授权值都要换成已查证值。
+`interval_seconds` 默认 1200 秒；用户没有明确选择其他间隔时保留默认，不因运行时长或成本自行调整。该值不创建周期入口，实际覆盖与 Agent 报告规则见 [operations.md](operations.md)。
 
 ## 启动/独立单元字段
 
@@ -65,7 +66,7 @@
 }
 ```
 
-存入 `units[].progress`。`step_field` 必需；`total` 常数和 `total_field` 二选一或都省略；`phase_field`、`label_field`、`work_kind` 可省略。`label` 可表示 fold、批次或其他现有阶段；标签/工作类型变化时重新估计速率。只读最多 1 MiB 的普通 JSON 文件，拒绝不合法数值、旧于当前任务的文件和已有归属字段冲突；文件缺失时仍可从任务日志解析进度。进度仅供观察，不证明成功或允许启动更多任务。
+存入 `units[].progress`。`step_field` 必需；`total` 常数和 `total_field` 二选一或都省略；`phase_field`、`label_field`、`work_kind` 可省略。`label` 可表示 fold、批次或其他现有阶段；标签/工作类型变化时重新估计速率。只读最多 1 MiB 的普通 JSON 文件，拒绝不合法数值、旧于当前任务的文件和已有归属字段冲突；文件缺失时仍可从任务日志解析进度。进度仅供观察，不证明成功或允许启动更多任务。`phase_rate / eta_seconds` 是运行时阶段估计；阶段结果和全流程 ETA 由 Agent 按 [operations.md](operations.md) 有界读取、核对与汇报，不往不可变契约塞入临时模型结论。
 
 ## 完成策略
 
